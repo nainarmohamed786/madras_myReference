@@ -25,6 +25,12 @@ const UserSchema=new mongoose.Schema({
         enum:["user","admin","super-admin"],
         default:"user"
     },
+    token:{
+      type:String
+    },
+     expires:{
+        type:Date
+    },
     resetPasswordToken:{
         type:String
     },

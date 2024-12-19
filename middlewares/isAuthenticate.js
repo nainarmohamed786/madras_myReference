@@ -23,7 +23,7 @@ const isAuthenticate=catchAsyncError(async (req,res,next)=>{
     
             try{
              const user=await UserModals.findById(decode.id);
-             if(!user){
+             if(!user.isVerified===true){
                 return next(new ErrorHandler("user is not found",404));
              };
              req.user=user;

@@ -7,31 +7,55 @@ import sendToken from '../utils/sendToken.js';
 import crypto from 'crypto';
 import sendMail from '../utils/mailService.js';
 import ErrorHandler from '../utils/ErrorHandler.js';
-import validator from 'validator'
+import validator from 'validator';
+import jwt from 'jsonwebtoken';
 
 export const signUp=catchAsyncError(async(req,res,next)=>{
 
     const {firstName,lastName,phoneNumber,email,password}=req.body;
 
-    if(await UserModals.findOne({email})){
+    const users=await UserModals.findOne({email});
+    console.log(users)
+
+    if(users?.isVerified===true){
         return next (new ErrorHandler("Email already exists",400));
     };
+    //generate a token and its hashed version
+    const rawToken=crypto.randomBytes(32).toString("hex");
+    console.log("raw token",rawToken)
+    const hashedToken=crypto.createHash("sha256").update(rawToken).digest("hex");
 
-    //check if mail is verified
-    const emailVerification=await EmailModel.findOne({email});
+    let user;
+    if(users){
+        user=await UserModals.updateOne({email},{token:hashedToken,expires:Date.now()+3*60*1000})
+    }
+    else{
+        user=await UserModals.create({email,token:hashedToken,expires:Date.now()+3*60*1000,isVerified:false,role:"user",firstName,lastName,phoneNumber,password}) //3 minutes
+    }
 
-    if(!emailVerification || !emailVerification.isVerified){
-        return next (new ErrorHandler("please verify your mail",401));
-    };
+    await user.save();
 
-    const user=await UserModals.create({
-        firstName,
-        lastName,
+    const verificationUrl=`${process.env.FRONTEND_URL}/verify-email?verify=${rawToken}&email=${encodeURIComponent(email)}`;
+
+    const emailMessage=`
+    <div style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; border-radius: 8px;">
+      <h1 style="color: #333;">Email Verification</h1>
+      <p style="font-size: 16px; color: #555;">Click the link below to verify your email:</p>
+      <a href="${verificationUrl}" target="_blank" style="display: inline-block; margin-top: 20px; padding: 10px 20px; background-color: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Verify Email</a>
+      <p style="font-size: 14px; color: #777; margin-top: 20px;">This link will expire in 3 minutes.</p>
+      <div style="margin-top: 30px; font-size: 12px; color: #aaa; text-align: center;">
+          <p>If you did not request this email, please ignore it.</p>
+      </div>
+  </div>
+    `;
+
+    await sendMail({
         email,
-        phoneNumber,
-        password,
-        isVerified:true
+        subject:"Email Verification",
+        message:emailMessage
     });
+
+
 
     sendToken(user,201,res);
 
@@ -95,13 +119,14 @@ export const verifyEmail=catchAsyncError(async(req,res,next)=>{
     token=crypto.createHash("sha256").update(token).digest("hex");
     console.log("hashed token",token);
 
-    const emailVerification=await EmailModel.findOne({token});
+    const emailVerification=await UserModals.findOne({token});
 
     if(!emailVerification ||emailVerification.expires < Date.now()){
         return next(new ErrorHandler("Invalid or expired token",400));
     }
 
-    await emailVerification.updateOne({isVerified:true});
+    await emailVerification.updateOne({isVerified:true,token:undefined,expires:undefined});
+ 
 
     res.status(200).json({message:"Email verified successfully"});
 });
@@ -132,6 +157,35 @@ export const signin=catchAsyncError(async(req,res,next)=>{
 
     sendToken(user,201,res);
 });
+
+export const getAccessToken=catchAsyncError(async (req,res,next)=>{
+   try{
+     const refershToken=req.cookies.key;
+     if(!refershToken){
+        return next(new ErrorHandler("Refresh token is missing",404));
+     };
+
+     jwt.verify(refershToken,process.env.REFRESHTOKEN_SECUIRITY_KEY,async(err,decode)=>{
+        if(err){
+            return next(new ErrorHandler("Refresh token is not valid",400));
+        }
+
+        const user=await UserModals.findById(decode.id);
+
+        if(!user){
+            return next(new ErrorHandler("user is not found",404));
+        }
+        req.user=user;
+
+        const accessToken=await user.getAccessToken();
+        res.json({accessToken});
+
+     })
+
+   }catch(err){
+       return next(new ErrorHandler("Refresh token is failed"));
+   } 
+})
 
 
 export const forgotPassword=catchAsyncError(async (req,res,next)=>{
